@@ -8,7 +8,7 @@ from typing import Tuple
 def make_rng(seed: int | None = None,
              *,
              device: str | torch.device = "cpu") -> torch.Generator:
-    g = torch.Generator(device)
+    g = torch.Generator(device=device)
     if seed is not None:
         g.manual_seed(seed)
     return g
@@ -28,28 +28,8 @@ def manual_seed_all(seed: int) -> None:
 # ──────────────────────────────────────────────────────────────────────
 # Linear-algebra
 # ──────────────────────────────────────────────────────────────────────
-def spec_norm(mat: Tensor,
-              *,
-              n_steps: int | None = None) -> Tensor:
-    """
-    Spectral norm of a 2-D tensor.  
-    • If `n_steps` is **None** (default) it uses `torch.linalg.svdvals`
-      - exact but O(n³).  
-    • If `n_steps` is an int (e.g. 20) it falls back to *power
-      iteration* - cheap and differentiable.
-
-    Returns a *0-D* tensor so you can `.backward()` on it if needed.
-    """
-    if n_steps is None:
-        return torch.linalg.svdvals(mat).amax()
-    # --- power iteration ---
-    v = torch.randn(mat.shape[1], device=mat.device)
-    v = v / v.norm()
-    for _ in range(n_steps):
-        v = (mat.T @ (mat @ v))
-        v = v / v.norm()
-    return (v @ (mat.T @ (mat @ v))).sqrt()
-
+def spec_norm(mat: Tensor) -> Tensor:
+    return torch.norm(mat, p=2)  # spectral norm
 
 def batched_spec_norm(mats: Tensor,
                       *,
