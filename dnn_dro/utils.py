@@ -1,6 +1,7 @@
 import torch
 from torch import Tensor
-from typing import Tuple
+import torch.nn.functional as F
+from typing import Tuple, Any
 
 # ──────────────────────────────────────────────────────────────────────
 # RNG plumbing
@@ -64,3 +65,20 @@ def gaussian(shape: Tuple[int, ...],
              dtype: torch.dtype = torch.float32) -> Tensor:
     g = torch.randn(shape, generator=rng, device=device, dtype=dtype)
     return g.mul_(std).add_(mean)
+
+# ──────────────────────────────────────────────────────────────────────
+# Element-wise ReLU
+# ──────────────────────────────────────────────────────────────────────
+def relu(z: Tensor) -> Tensor:
+    return F.relu(z)
+
+# ──────────────────────────────────────────────────────────────────────
+# Softmax
+# ──────────────────────────────────────────────────────────────────────
+def softmax(logits: Tensor, dim: int = -1) -> Tensor:
+    return F.softmax(logits, dim=dim)
+
+# ──────────────────────────────────────────────────────────────────────
+# Cross-entropy
+# ──────────────────────────────────────────────────────────────────────
+cross_entropy = F.cross_entropy

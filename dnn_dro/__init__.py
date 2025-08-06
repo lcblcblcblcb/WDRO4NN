@@ -1,12 +1,3 @@
-"""
-dnn_dro  –  Torch-centric helpers for our DRO experiments.
-
-Top-level re-exports
---------------------
->>> from dnn_dro import gaussian, relu, softmax, cross_entropy
->>> from dnn_dro import global_L, local_L          # ← Lipschitz stubs
-"""
-
 from importlib.metadata import version as _pkg_version
 
 # ------------------------------------------------------------------
@@ -26,20 +17,9 @@ from .utils import (
     gaussian,
     spec_norm,
     batched_spec_norm,
-)
-
-from .activations import (
     relu,
     softmax,
-    cross_entropy,      # alias to torch.nn.functional.cross_entropy
-)
-
-# ------------------------------------------------------------------
-# Lipschitz placeholders (raise NotImplementedError for now)
-# ------------------------------------------------------------------
-from .lipschitz import (
-    global_L,          # TODO: implement
-    local_L,           # TODO: implement
+    cross_entropy,
 )
 
 # ------------------------------------------------------------------
@@ -49,13 +29,11 @@ from . import models
 
 __all__ = [
     # utils
-    "make_rng", "manual_seed_all", "gaussian", "spec_norm", "batched_spec_norm",
-    # activations
-    "relu", "softmax", "cross_entropy",
-    # Lipschitz (stubs for now)
-    "global_L", "local_L",
+    "make_rng", "manual_seed_all", 
+    "gaussian", "spec_norm", "batched_spec_norm",
+    "relu", "softmax", "cross_entropy",    
     # sub-packages
-    "models",
+    "models", "experiments",
     # meta
     "__version__",
 ]
