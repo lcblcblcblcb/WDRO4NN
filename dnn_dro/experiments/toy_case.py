@@ -1,16 +1,14 @@
-import pandas as pd
-import numpy as np
-from matplotlib import pyplot as plt
-from matplotlib.patches import Polygon
 import math
 import torch
+import cvxpy as cp
+import numpy as np
+import pandas as pd
+from dnn_dro import *
 from torch import Tensor
 import torch.nn.functional as F
-from dnn_dro import (make_rng, manual_seed_all, gaussian, 
-                     spec_norm, batched_spec_norm,
-                     relu, softmax, cross_entropy, 
-                     global_L, local_L)
 from typing import Tuple, Any
+from matplotlib import pyplot as plt
+from matplotlib.patches import Polygon
 
 # ──────────────────────────────────────────────────────────────────────
 # For Checking Inequalities
@@ -281,47 +279,101 @@ def check_mask_topology(
     # return equal, D_global, D_i
     return
 
+# helper to find u with CVXPY
+def find_feasible_u(J, w, W1, D_star,
+                    n_sols=5, eps=1e-5, tol=1e-6, solver=cp.SCS):
+    """
+    Return up to n_sols vectors u with
+        J u = w,   ||u||₂ = 1,   and   u ∈ Ω(D_star)  (strict ε-margin).
+    """
+    n          = J.shape[1]
+    D          = D_star.astype(float)                 # (n1,n1) diagonal
+    I_minus_D  = np.eye(D.shape[0]) - D
+    sols, rng  = [], np.random.default_rng()
+
+    for _ in range(n_sols):
+        u = cp.Variable(n)
+        t = cp.Variable()                             # radial slack (≤ 1)
+        jitter = rng.standard_normal(n)               # random affine obj
+
+        prob = cp.Problem(cp.Maximize(t + 1e-3 * jitter @ u), [
+            J @ u == w,
+            cp.norm(u, 2) <= t,
+            t <= 1,
+            D         @ W1 @ u >=  eps,               # active neurons
+            I_minus_D @ W1 @ u <= -eps                # inactive neurons
+        ])
+        prob.solve(solver=solver, eps=tol, verbose=False)
+
+        if prob.status not in ("optimal", "optimal_inaccurate"):
+            break
+
+        u_val = u.value / np.linalg.norm(u.value)     # force ||u||₂ = 1
+        # de-duplicate (up to sign)
+        if all(min(np.linalg.norm(u_val - v),
+                   np.linalg.norm(u_val + v)) > 1e-3 for v in sols):
+            sols.append(u_val)
+
+    return sols
+
 # Satisfy (D2) for a 1-hidden-layer ReLU network
-def build_D2_satisfying(n=2, n1=2, K=2, seed=42,tol=1e-4, device="cpu", max_tries=5000):
-    g = make_rng(seed, device=device)
-    manual_seed_all(seed)
-    e = torch.eye(K, device=device)
+def build_D2_satisfying(n=2, n1=2, K=2, seed=42,
+                        tol=1e-4, device="cpu", max_tries=5000,
+                        n_sols_per_mask=5):
+    """
+    Sample (W1, W2) until (D2) holds and at least one unit vector u
+    satisfying all constraints is found via CVXPY.
+    Returns:
+        W1, W2, D_star, J_star, radius, w, u_list, c, j_plus
+    """
+    # -----------------------  torch RNG helpers
+    g = torch.Generator(device).manual_seed(seed)
+    torch.cuda.manual_seed_all(seed) if device.startswith("cuda") else None
+    np_rng = np.random.default_rng(seed)
+    e      = torch.eye(K, device=device)
 
-    c = np.random.default_rng(seed).integers(0, K)
-    masks = ((torch.arange(2 ** n1, device=device).unsqueeze(1) >> torch.arange(n1, device=device)) & 1).float()
+    # -----------------------  random label
+    c = np_rng.integers(0, K)
 
+    # -----------------------  all 2^n1 binary masks
+    masks = ((torch.arange(2 ** n1, device=device).unsqueeze(1)
+              >> torch.arange(n1, device=device)) & 1).float()
+
+    # -----------------------  try / repeat
     for _ in range(max_tries):
-        W1 = gaussian((n1, n), rng=g, device=device)
-        W2 = gaussian((K, n1), rng=g, device=device)
+        W1 = torch.randn(n1, n,  generator=g, device=device)
+        W2 = torch.randn(K,  n1, generator=g, device=device)
 
-        # Batch: compute J for all masks
-        W1_masked = masks.unsqueeze(2) * W1          # (2^n1, n1, n)
-        J_all = torch.einsum("kn,bnj->bkj", W2, W1_masked)
-        sigmas = batched_spec_norm(J_all)
-        best_idx = torch.argmax(sigmas)
-        radius = sigmas[best_idx].item()
-        J_star = J_all[best_idx]
-        D_star = torch.diag(masks[best_idx]).cpu().numpy()
+        # Jacobians for every mask
+        W1_masked = masks.unsqueeze(2) * W1
+        J_all     = torch.einsum("kn,bnj->bkj", W2, W1_masked)  # (2^n1,K,n)
+        sigmas    = torch.linalg.svdvals(J_all)[:, 0]           # spectral norm
+        best_idx  = torch.argmax(sigmas)
+        radius    = sigmas[best_idx].item()
+        J_star_t  = J_all[best_idx]
+        D_star    = torch.diag(masks[best_idx]).cpu().numpy()
 
-        if torch.linalg.matrix_rank(J_star) < min(n, K):
+        # full-rank check
+        if torch.linalg.matrix_rank(J_star_t) < min(n, K):
             continue
 
-        for j_plus in [j for j in range(K) if j != c]:
-            w = (radius / np.sqrt(2)) * (e[j_plus] - e[c])
-            try:
-                u = torch.linalg.solve(J_star, w)
-            except RuntimeError:
-                continue
-            if not torch.isclose(torch.linalg.norm(u), torch.tensor(1.0, device=device), atol=tol):
-                continue
+        # ---------- convert to NumPy once for CVXPY
+        J_star_np = J_star_t.cpu().numpy()
+        W1_np     = W1.cpu().numpy()
 
-            # Check activation pattern matches mask
-            val = (W1 @ u).cpu().numpy()
-            mask_np = masks[best_idx].cpu().numpy()
-            if np.all((mask_np == 1) & (val > 0) | (mask_np == 0) & (val < 0)):
-                return W1.cpu().numpy(), W2.cpu().numpy(), D_star, J_star.cpu().numpy(), radius, w.cpu().numpy(), u.cpu().numpy(), c, j_plus
+        # ---------- loop over j_+ ≠ c
+        for j_plus in (j for j in range(K) if j != c):
+            w_t = (radius / math.sqrt(2)) * (e[j_plus] - e[c])
+            w_np = w_t.cpu().numpy()
 
-    raise RuntimeError("Failed to satisfy (D2).")
+            # ---- find *all* feasible u inside Ω
+            u_list = find_feasible_u(J_star_np, w_np, W1_np, D_star,
+                                     n_sols=n_sols_per_mask)
+            if u_list:                      # success!
+                return (W1_np, W2.cpu().numpy(), D_star, J_star_np,
+                        radius, w_np, u_list, c, j_plus)
+
+    raise RuntimeError("Failed to satisfy (D2) within max_tries.")
 
 # Pretty print the results of build_D2_satisfying
 def pretty_print_D2(W1, W2, D_star, J_star, radius, w, u, c, j_plus):
