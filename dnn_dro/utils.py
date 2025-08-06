@@ -28,8 +28,15 @@ def manual_seed_all(seed: int) -> None:
 # ──────────────────────────────────────────────────────────────────────
 # Linear-algebra
 # ──────────────────────────────────────────────────────────────────────
-def spec_norm(mat: Tensor) -> Tensor:
-    return torch.norm(mat, p=2)  # spectral norm
+def spec_norm(mat: Tensor, n_steps: int | None = None) -> Tensor:
+    if n_steps is None:
+        return torch.linalg.norm(mat, 2)
+    # Power iteration
+    x = torch.randn(mat.shape[-1], device=mat.device)
+    for _ in range(n_steps):
+        x = torch.nn.functional.normalize(mat @ x, dim=0)
+        x = torch.nn.functional.normalize(mat.T @ x, dim=0)
+    return torch.norm(mat @ x, 2)
 
 def batched_spec_norm(mats: Tensor,
                       *,

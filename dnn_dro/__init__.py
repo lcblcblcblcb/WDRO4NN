@@ -25,7 +25,7 @@ from .utils import (
     manual_seed_all,
     gaussian,
     spec_norm,
-    batched_spec_norm
+    batched_spec_norm,
 )
 
 from .activations import (
